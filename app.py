@@ -3,22 +3,11 @@ import requests
 import pandas as pd
 import time
 
+# 1. Pagina instellingen (MOET bovenaan staan)
 st.set_page_config(page_title="Peppol Validator BE", page_icon="🇧🇪")
-st.title("🔍 Peppol België Validator")
-
-# Functie met 'User-Agent' om blokkades te voorkomenimport streamlit as st
-import requests
-import pandas as pd
-import time
-
-st.set_page_config(page_title="Peppol Validator BE", page_icon="🇧🇪")
-st.title("🔍 Peppol België Validator")
 
 def call_directory(p_id):
-    # We voegen een 'User-Agent' toe zodat de Peppol server ons niet blokkeert
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0'}
     url = f"https://directory.peppol.eu/public/search/1.0/json?participant={p_id}"
     try:
         r = requests.get(url, headers=headers, timeout=10)
@@ -28,89 +17,31 @@ def call_directory(p_id):
         pass
     return False
 
-uploaded_file = st.file_uploader("Upload je bestand", type=['csv', 'xlsx'])
+# 2. De Titels
+st.title("🔍 Peppol België Validator")
+st.write("Controleer of Belgische bedrijven geregistreerd zijn op het 0208 (KBO) of 9925 (BTW) schema.")
+
+# 3. Bestand uploaden (Slechts één keer in de code!)
+uploaded_file = st.file_uploader("Stap 1: Upload je bestand (CSV of Excel)", type=['csv', 'xlsx'], key="unique_uploader_1")
 
 if uploaded_file:
     try:
-        # Inlezen met automatische scheidingsteken-detectie
+        # Bestand inlezen
         if uploaded_file.name.endswith('csv'):
             df = pd.read_csv(uploaded_file, sep=None, engine='python')
         else:
             df = pd.read_excel(uploaded_file)
         
-        kolom = st.selectbox("Selecteer de kolom (bijv. btw-nu)", df.columns)
+        # Kolom selecteren
+        kolom = st.selectbox("Stap 2: Kies de kolom met nummers", df.columns)
         
-        if st.button("Start Controle"):
+        if st.button("Stap 3: Start Analyse"):
             results = []
             progress = st.progress(0)
             data_rijen = df[kolom].dropna().astype(str).tolist()
             
             for i, raw_nr in enumerate(data_rijen):
-                # STAP 1: Haal ALLEEN de cijfers eruit (verwijdert BE, punten, etc.)
-                clean = "".join(filter(str.isdigit, raw_nr))
-                
-                # STAP 2: Fix de ontbrekende nul (Belgische nrs = 10 cijfers)
-                if len(clean) == 9:
-                    clean = "0" + clean
-                elif len(clean) > 10:
-                    clean = clean[-10:]
-                
-                if len(clean) == 10:
-                    # Check 0208 (Zonder BE prefix)
-                    found_0208 = call_directory(f"iso6523-actorid-upis::0208:{clean}")
-                    time.sleep(0.6) # Pauze om blokkades te voorkomen
-                    
-                    # Check 9925 (Met BE prefix)
-                    found_9925 = call_directory(f"iso6523-actorid-upis::9925:BE{clean}")
-                    
-                    results.append({
-                        "Invoer": raw_nr,
-                        "Zoeknr": clean,
-                        "0208 (KBO)": "✅" if found_0208 else "❌",
-                        "9925 (BTW)": "✅" if found_9925 else "❌",
-                        "Advies": "✅ Gebruik 0208" if found_0208 else "⚠️ Gebruik 0208 (enkel 9925)" if found_9925 else "❌ Niet op Peppol"
-                    })
-                
-                progress.progress((i + 1) / len(data_rijen))
-                time.sleep(0.4)
-            
-            st.subheader("Resultaten voor je ERP")
-            res_df = pd.DataFrame(results)
-            st.table(res_df)
-            st.download_button("Download Rapport", res_df.to_csv(index=False), "peppol_audit.csv")
-
-    except Exception as e:
-        st.error(f"Er ging iets mis: {e}")
-def call_directory(p_id):
-    url = f"https://directory.peppol.eu/public/search/1.0/json?participant={p_id}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            return r.json().get("total-result-count", 0) > 0
-    except:
-        pass
-    return False
-
-uploaded_file = st.file_uploader("Upload je bestand", type=['csv', 'xlsx'])
-
-if uploaded_file:
-    try:
-        # Extra robuust inlezen voor afgekapte titels
-        if uploaded_file.name.endswith('csv'):
-            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8-sig')
-        else:
-            df = pd.read_excel(uploaded_file)
-        
-        kolom = st.selectbox("Welke kolom bevat de nummers?", df.columns)
-        
-        if st.button("Start Analyse"):
-            results = []
-            progress = st.progress(0)
-            data_rijen = df[kolom].dropna().astype(str).tolist()
-            
-            for i, raw_nr in enumerate(data_rijen):
-                # Alleen cijfers overhouden
+                # Opschonen: alleen cijfers
                 clean = "".join(filter(str.isdigit, raw_nr))
                 if len(clean) == 9: clean = "0" + clean
                 elif len(clean) > 10: clean = clean[-10:]
@@ -118,18 +49,22 @@ if uploaded_file:
                 if len(clean) == 10:
                     # Zoek op beide schema's
                     found_0208 = call_directory(f"iso6523-actorid-upis::0208:{clean}")
-                    time.sleep(1) # Veiligheidsmarge
+                    time.sleep(0.5)
                     found_9925 = call_directory(f"iso6523-actorid-upis::9925:BE{clean}")
                     
                     results.append({
                         "Invoer": raw_nr,
-                        "Zoeknr": clean,
+                        "KBO_Nummer": clean,
                         "0208 (KBO)": "✅" if found_0208 else "❌",
                         "9925 (BTW)": "✅" if found_9925 else "❌",
-                        "Advies": "✅ Gebruik 0208" if found_0208 else "⚠️ Enkel 9925" if found_9925 else "❌ Niet gevonden"
+                        "Advies": "✅ OK op 0208" if found_0208 else "⚠️ Gebruik 0208 (nu enkel 9925)" if found_9925 else "❌ Niet op Peppol"
                     })
                 progress.progress((i + 1) / len(data_rijen))
             
-            st.table(pd.DataFrame(results))
+            # Toon tabel
+            res_df = pd.DataFrame(results)
+            st.table(res_df)
+            st.download_button("Download resultaten", res_df.to_csv(index=False), "peppol_resultaat.csv")
+
     except Exception as e:
-        st.error(f"Fout: {e}")
+        st.error(f"Fout bij verwerking: {e}")
