@@ -1,90 +1,69 @@
 import streamlit as st
-import requests
 import pandas as pd
-import time
-import urllib3
+import io
 
-# Onderdruk SSL-waarschuwingen
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+st.set_page_config(page_title="Peppol Link Generator", page_icon="🔗")
 
-st.set_page_config(page_title="Peppol 9925 Checker", page_icon="🇧🇪")
-
-def check_9925_registration(session, vat_number):
-    """
-    Controleert specifiek op het 9925 (BTW) schema.
-    """
-    # Opschonen: enkel cijfers overhouden
-    clean_nr = "".join(filter(str.isdigit, str(vat_number)))
-    if len(clean_nr) == 9:
-        clean_nr = "0" + clean_nr
-    elif len(clean_nr) > 10:
-        clean_nr = clean_nr[-10:]
-
-    if len(clean_nr) != 10:
-        return "ONGELDIG FORMAAT"
-
-    # Het volledige Peppol Participant ID voor 9925
-    participant_id = f"iso6523-actorid-upis::9925:BE{clean_nr}"
-    url = f"https://directory.peppol.eu/public/search/1.0/json?participant={participant_id}"
+def generate_peppol_link(raw_nr):
+    # 1. Alleen cijfers behouden
+    clean = "".join(filter(str.isdigit, str(raw_nr)))
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Referer': 'https://directory.peppol.eu/',
-        'X-Requested-With': 'XMLHttpRequest'
-    }
+    # 2. Formatteren naar 10 cijfers (Belgisch formaat)
+    if len(clean) == 9:
+        clean = "0" + clean
+    elif len(clean) > 10:
+        clean = clean[-10:]
+    
+    if len(clean) == 10:
+        # Dit is de officiële URL structuur voor de Peppol Directory
+        # We linken direct naar de zoekresultaten voor het 9925 schema
+        participant_id = f"9925:be{clean}"
+        return f"https://directory.peppol.eu/public/locale-en_US/menuitem-search?q={participant_id}"
+    return "Ongeldig nummer"
 
-    try:
-        # Stap 1: Bezoek eerst de hoofdpagina (indien nieuwe sessie) voor cookies
-        if not session.cookies:
-            session.get("https://directory.peppol.eu/", timeout=10, verify=False)
-            time.sleep(1)
+st.title("🔗 Peppol 9925 Link Generator")
+st.markdown("""
+Upload een lijst met BTW-nummers. Dit script maakt voor elk nummer een 
+**directe officiële link** naar de Peppol Directory, zodat je blokkades omzeilt.
+""")
 
-        # Stap 2: De eigenlijke API call
-        response = session.get(url, headers=headers, timeout=15, verify=False)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return "✅ Geregistreerd (9925)" if data.get("total-result-count", 0) > 0 else "❌ Niet gevonden"
-        elif response.status_code == 403:
-            return "🛑 IP Geblokkeerd (403)"
-        else:
-            return f"FOUT ({response.status_code})"
-    except Exception:
-        return "⚠️ Verbindingsfout"
-
-st.title("🇧🇪 Peppol 9925 BTW Checker")
-st.markdown("Controleer of Belgische BTW-nummers geregistreerd zijn op het **9925** schema.")
-
-# Upload sectie
-uploaded_file = st.file_uploader("Upload CSV of Excel", type=['csv', 'xlsx'])
+uploaded_file = st.file_uploader("Kies een CSV of Excel bestand", type=['csv', 'xlsx'])
 
 if uploaded_file:
     try:
-        df = pd.read_csv(uploaded_file, sep=None, engine='python') if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
-        kolom = st.selectbox("Selecteer de kolom met BTW-nummers", df.columns)
+        # Bestand inlezen
+        if uploaded_file.name.endswith('csv'):
+            df = pd.read_csv(uploaded_file, sep=None, engine='python')
+        else:
+            df = pd.read_excel(uploaded_file)
         
-        if st.button("Start 9925 Controle"):
-            results = []
-            nummers = df[kolom].dropna().unique().tolist()
-            progress_bar = st.progress(0)
+        kolom = st.selectbox("Welke kolom bevat de BTW-nummers?", df.columns)
+        
+        if st.button("Genereer Links"):
+            # Maak de nieuwe kolom aan
+            df['Peppol_9925_Link'] = df[kolom].apply(generate_peppol_link)
             
-            with requests.Session() as session:
-                for i, nr in enumerate(nummers):
-                    status = check_9925_registration(session, nr)
-                    results.append({"Invoer": nr, "9925 Status": status})
-                    
-                    # Update UI
-                    progress_bar.progress((i + 1) / len(nummers))
-                    # PAUZE: Zeer belangrijk om blokkades te voorkomen
-                    time.sleep(3.0) 
-
-            res_df = pd.DataFrame(results)
-            st.subheader("Resultaten")
-            st.dataframe(res_df, use_container_width=True)
+            st.success("Links gegenereerd!")
             
-            # Download
-            st.download_button("Download Resultaten", res_df.to_csv(index=False).encode('utf-8'), "peppol_9925_check.csv")
-
+            # Toon een preview (klikbare links in Streamlit)
+            st.subheader("Preview (eerste 10 regels)")
+            st.write(df[[kolom, 'Peppol_9925_Link']].head(10))
+            
+            # Download knop voor het nieuwe bestand
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Peppol Links')
+            
+            processed_data = output.getvalue()
+            
+            st.download_button(
+                label="Download verrijkte Excel",
+                data=processed_data,
+                file_name="peppol_links_resultaat.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
     except Exception as e:
-        st.error(f"Er ging iets mis: {e}")
+        st.error(f"Er is een fout opgetreden: {e}")
+
+st.info("Tip: In de gedownloade Excel kun je op de link klikken om direct de status te zien zonder IP-blokkade van het script.")
