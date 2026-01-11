@@ -2,58 +2,35 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
-from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="Peppol Validator BE", page_icon="🇧🇪", layout="wide")
+st.set_page_config(page_title="Peppol Validator BE", page_icon="🇧🇪")
 
-# Gebruik caching om dubbele API-calls voor hetzelfde nummer te voorkomen
-@st.cache_data(ttl=3600)
 def check_single_id(participant_id):
+    # Een meer realistische browser header
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://directory.peppol.eu/'
     }
     url = f"https://directory.peppol.eu/public/search/1.0/json?participant={participant_id}"
+    
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("total-result-count", 0) > 0
-    except requests.exceptions.RequestException:
-        return None # Geeft aan dat er een netwerkfout was
-    return False
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 403:
+            return "GEBLOKKEERD (403)"
+        elif response.status_code == 429:
+            return "RATE LIMIT (429)"
+        elif response.status_code == 200:
+            count = response.json().get("total-result-count", 0)
+            return "JA" if count > 0 else "NEE"
+        else:
+            return f"FOUT ({response.status_code})"
+    except Exception as e:
+        return f"NETWERK FOUT"
 
-def process_row(raw_nr):
-    """Verwerkt een enkel nummer en geeft de resultaten terug."""
-    # 1. Opschonen
-    clean = "".join(filter(str.isdigit, str(raw_nr)))
-    
-    # 2. Fix lengte
-    if len(clean) == 9:
-        clean = "0" + clean
-    elif len(clean) > 10:
-        clean = clean[-10:]
-    
-    if len(clean) != 10:
-        return {"Invoer": raw_nr, "Zoeknummer": clean, "Status": "Ongeldig formaat", "Advies": "❌ Ongeldig nummer"}
-
-    # 3. Checks (0208 en 9925)
-    is_0208 = check_single_id(f"iso6523-actorid-upis::0208:{clean}")
-    # Kleine delay om de server te ontzien bij parallelle taken
-    time.sleep(0.2) 
-    is_9925 = check_single_id(f"iso6523-actorid-upis::9925:BE{clean}")
-    
-    status_text = "✅ Gebruik 0208" if is_0208 else "⚠️ Enkel 9925 actief" if is_9925 else "❌ Niet gevonden"
-    
-    return {
-        "Invoer": raw_nr,
-        "Zoeknummer": clean,
-        "0208 (KBO)": "✅" if is_0208 else "❌",
-        "9925 (BTW)": "✅" if is_9925 else "❌",
-        "Advies": status_text
-    }
-
-st.title("🔍 Peppol België Validator")
-st.info("Deze tool controleert of nummers geregistreerd zijn via het KBO (0208) of BTW (9925) schema.")
+st.title("🔍 Peppol België Validator (Debug Versie)")
+st.info("Deze versie laat zien waarom een nummer eventueel niet gevonden wordt.")
 
 file = st.file_uploader("Upload je CSV of Excel", type=['csv', 'xlsx'])
 
@@ -65,33 +42,47 @@ if file:
             df = pd.read_excel(file)
         
         kolom = st.selectbox("Welke kolom bevat de nummers?", df.columns)
-        nummers = df[kolom].dropna().unique().tolist() # Unieke nummers bespaart tijd
         
-        if st.button(f"Start controle voor {len(nummers)} unieke nummers"):
+        if st.button("Start de controle"):
             results = []
+            nummers = df[kolom].dropna().astype(str).tolist()
             progress_bar = st.progress(0)
-            status_text = st.empty()
             
-            # Gebruik ThreadPoolExecutor voor snellere verwerking (max 3 workers om blokkade te vermijden)
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                for i, result in enumerate(executor.map(process_row, nummers)):
-                    results.append(result)
-                    progress = (i + 1) / len(nummers)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Verwerkt: {i+1}/{len(nummers)}")
+            for i, raw_nr in enumerate(nummers):
+                # Opschonen
+                clean = "".join(filter(str.isdigit, raw_nr))
+                if len(clean) == 9: clean = "0" + clean
+                if len(clean) > 10: clean = clean[-10:]
+                
+                if len(clean) == 10:
+                    # Check beide schemas
+                    res_0208 = check_single_id(f"iso6523-actorid-upis::0208:{clean}")
+                    time.sleep(1.2) # Iets langere pauze voor veiligheid
+                    
+                    res_9925 = check_single_id(f"iso6523-actorid-upis::9925:BE{clean}")
+                    
+                    # Logica voor advies
+                    if res_0208 == "JA":
+                        advies = "✅ Gebruik 0208"
+                    elif res_9925 == "JA":
+                        advies = "⚠️ Enkel 9925 actief"
+                    elif "GEBLOKKEERD" in str(res_0208) or "RATE" in str(res_0208):
+                        advies = "🛑 Server blokkeert aanvraag"
+                    else:
+                        advies = "❌ Niet gevonden"
 
-            # Resultaten tonen
+                    results.append({
+                        "Invoer": raw_nr,
+                        "KBO (0208)": res_0208,
+                        "BTW (9925)": res_9925,
+                        "Advies": advies
+                    })
+                
+                progress_bar.progress((i + 1) / len(nummers))
+                time.sleep(0.5)
+
             res_df = pd.DataFrame(results)
-            st.subheader("Resultaten")
-            
-            # Styling voor de tabel
-            st.dataframe(res_df.style.applymap(
-                lambda x: 'color: green' if '✅' in str(x) else ('color: red' if '❌' in str(x) else ''),
-                subset=['Advies']
-            ))
-            
-            csv = res_df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download resultaten als CSV", csv, "peppol_resultaten.csv", "text/csv")
+            st.table(res_df)
             
     except Exception as e:
-        st.error(f"Er ging iets mis: {e}")
+        st.error(f"Fout: {e}")
