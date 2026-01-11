@@ -1,60 +1,73 @@
-import os
+import streamlit as st
 import xml.etree.ElementTree as ET
+import io
+import zipfile
 
-# De namespaces specifiek voor jouw UBL Invoice
+# Namespaces uit jouw UBL XML
 namespaces = {
     'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
     'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
     '': 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
 }
 
-def fix_be_peppol_id(file_path, output_path):
-    # Registreer namespaces voor een schone output
+def convert_xml(xml_content):
     ET.register_namespace('', "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2")
     ET.register_namespace('cac', "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2")
     ET.register_namespace('cbc', "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2")
+    
+    tree = ET.parse(io.BytesIO(xml_content))
+    root = tree.getroot()
+    changed = False
 
-    try:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
+    # 1. Pas EndpointID aan
+    endpoint = root.find('.//cac:AccountingCustomerParty/cbc:EndpointID[@schemeID="9925"]', namespaces)
+    if endpoint is not None:
+        new_val = endpoint.text.replace('BE', '').replace('.', '').strip()
+        endpoint.text = new_val
+        endpoint.set('schemeID', '0208')
+        changed = True
 
-        # Wijziging 1: EndpointID (van 9925 naar 0208)
-        endpoint = root.find('.//cac:AccountingCustomerParty/cbc:EndpointID[@schemeID="9925"]', namespaces)
-        if endpoint is not None:
-            new_val = endpoint.text.replace('BE', '').replace('.', '').strip()
-            endpoint.text = new_val
-            endpoint.set('schemeID', '0208')
+    # 2. Pas PartyIdentification aan
+    party_id = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID[@schemeID="9925"]', namespaces)
+    if party_id is not None:
+        new_val = party_id.text.replace('BE', '').replace('.', '').strip()
+        party_id.text = new_val
+        party_id.set('schemeID', '0208')
+        changed = True
 
-        # Wijziging 2: PartyIdentification
-        party_id = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID[@schemeID="9925"]', namespaces)
-        if party_id is not None:
-            new_val = party_id.text.replace('BE', '').replace('.', '').strip()
-            party_id.text = new_val
-            party_id.set('schemeID', '0208')
+    output = io.BytesIO()
+    tree.write(output, encoding='utf-8', xml_declaration=True)
+    return output.getvalue(), changed
 
-        tree.write(output_path, encoding='utf-8', xml_declaration=True)
-        return True
-    except Exception as e:
-        print(f"Fout bij verwerken van {file_path}: {e}")
-        return False
+# --- INTERFACE ---
+st.set_page_config(page_title="Peppol Prefix Converter", page_icon="📑")
+st.title("🇧🇪 Peppol XML Converter")
+st.write("Upload je XML-facturen om de prefix van **9925** naar **0208** om te zetten.")
 
-# --- CONFIGURATIE ---
-# Gebruik '.' voor de huidige map waar het script staat
-input_folder = '.' 
-output_folder = 'gecorrigeerde_xmls'
+uploaded_files = st.file_uploader("Selecteer XML bestanden", type="xml", accept_multiple_files=True)
 
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
+if uploaded_files:
+    st.write(f"Aantal bestanden geselecteerd: {len(uploaded_files)}")
+    
+    # Maak een ZIP bestand aan voor alle verwerkte bestanden
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for uploaded_file in uploaded_files:
+            content = uploaded_file.read()
+            converted_content, was_changed = convert_xml(content)
+            
+            # Voeg toe aan ZIP
+            zip_file.writestr(uploaded_file.name, converted_content)
+            
+            if was_changed:
+                st.success(f"✅ {uploaded_file.name} is omgezet.")
+            else:
+                st.info(f"ℹ️ {uploaded_file.name} had geen 9925 prefix.")
 
-# Lus door de bestanden
-found_files = False
-for filename in os.listdir(input_folder):
-    if filename.endswith('.xml'):
-        found_files = True
-        input_path = os.path.join(input_folder, filename)
-        output_path = os.path.join(output_folder, filename)
-        if fix_be_peppol_id(input_path, output_path):
-            print(f"Succes: {filename} omgezet naar schema 0208.")
-
-if not found_files:
-    print(f"Geen XML-bestanden gevonden in map: {os.path.abspath(input_folder)}")
+    st.divider()
+    st.download_button(
+        label="📥 Download Alle Gecorrigeerde XML's (.zip)",
+        data=zip_buffer.getvalue(),
+        file_name="gecorrigeerde_peppol_facturen.zip",
+        mime="application/zip"
+    )
