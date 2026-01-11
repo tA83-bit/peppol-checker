@@ -1,60 +1,51 @@
-import streamlit as st
-import pandas as pd
-import io
+import os
+import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="Peppol Link Generator BE", page_icon="🔗")
+# De namespaces uit jouw voorbeeldbestand
+namespaces = {
+    'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+    'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+    '': 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
+}
 
-def get_peppol_url(raw_nr, scheme="9925"):
-    """Genereert de officiële URL voor de Peppol Directory."""
-    clean = "".join(filter(str.isdigit, str(raw_nr)))
-    
-    if len(clean) == 9:
-        clean = "0" + clean
-    elif len(clean) > 10:
-        clean = clean[-10:]
-    
-    if len(clean) == 10:
-        # 9925 gebruikt vaak 'be' prefix, 0208 meestal niet in de zoekopdracht
-        prefix = "be" if scheme == "9925" else ""
-        query = f"{scheme}:{prefix}{clean}"
-        return f"https://directory.peppol.eu/public/locale-en_US/menuitem-search?q={query}"
-    return "Ongeldig nummer"
+def fix_be_peppol_id(file_path, output_path):
+    # Registreer namespaces om de 'ns0:' prefix in de output te voorkomen
+    ET.register_namespace('', "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2")
+    ET.register_namespace('cac', "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2")
+    ET.register_namespace('cbc', "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2")
 
-st.title("🔗 Peppol België Link Generator")
-st.markdown("""
-Dit script maakt direct klikbare links naar de officiële **Peppol Directory**. 
-Zo hoef je niet bang te zijn voor IP-blokkades, omdat je de status live in je browser bekijkt.
-""")
+    tree = ET.parse(file_path)
+    root = tree.getroot()
 
-file = st.file_uploader("Upload je lijst (CSV of Excel)", type=['csv', 'xlsx'])
+    # 1. Pas het EndpointID van de AccountingCustomerParty aan
+    endpoint = root.find('.//cac:AccountingCustomerParty/cbc:EndpointID[@schemeID="9925"]', namespaces)
+    if endpoint is not None:
+        old_val = endpoint.text
+        # Verwijder BE en eventuele punten/spaties
+        new_val = old_val.replace('BE', '').replace('.', '').strip()
+        endpoint.text = new_val
+        endpoint.set('schemeID', '0208')
+        print(f"EndpointID aangepast: {old_val} -> 0208:{new_val}")
 
-if file:
-    try:
-        if file.name.endswith('csv'):
-            df = pd.read_csv(file, sep=None, engine='python')
-        else:
-            df = pd.read_excel(file)
-        
-        kolom = st.selectbox("Welke kolom bevat de nummers?", df.columns)
-        
-        if st.button("Genereer Officiële Links"):
-            # Genereer links voor beide schema's
-            df['Link_BTW_9925'] = df[kolom].apply(lambda x: get_peppol_url(x, "9925"))
-            df['Link_KBO_0208'] = df[kolom].apply(lambda x: get_peppol_url(x, "0208"))
-            
-            st.success("Links succesvol aangemaakt!")
-            st.dataframe(df[[kolom, 'Link_BTW_9925', 'Link_KBO_0208']].head(10))
-            
-            # Excel export (zonder de noodzaak voor xlsxwriter als je engine='openpyxl' gebruikt)
-            output = io.BytesIO()
-            df.to_excel(output, index=False) # Gebruikt standaard engine
-            
-            st.download_button(
-                label="Download Resultaten als Excel",
-                data=output.getvalue(),
-                file_name="peppol_status_links.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-    except Exception as e:
-        st.error(f"Fout: {e}")
+    # 2. Pas de PartyIdentification van de AccountingCustomerParty aan
+    party_id = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID[@schemeID="9925"]', namespaces)
+    if party_id is not None:
+        old_val = party_id.text
+        new_val = old_val.replace('BE', '').replace('.', '').strip()
+        party_id.text = new_val
+        party_id.set('schemeID', '0208')
+        print(f"PartyID aangepast: {old_val} -> 0208:{new_val}")
+
+    # Opslaan met behoud van XML declaratie
+    tree.write(output_path, encoding='utf-8', xml_declaration=True)
+
+# Uitvoeren voor jouw map
+input_folder = 'jouw_map_met_xmls'
+output_folder = 'gecorrigeerde_xmls'
+
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
+
+for filename in os.listdir(input_folder):
+    if filename.endswith('.xml'):
+        fix_be_peppol_id(os.path.join(input_folder, filename), os.path.join(output_folder, filename))
