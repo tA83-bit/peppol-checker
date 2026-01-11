@@ -17,14 +17,11 @@ def convert_xml(xml_content):
     ET.register_namespace('cbc', "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2")
     
     try:
-        # Gebruik BytesIO om de content correct te verwerken
         tree = ET.parse(io.BytesIO(xml_content))
         root = tree.getroot()
         changed = False
 
-        # Zoek robuust naar de klant-sectie
-        # We zoeken naar alle elementen die een schemeID="9925" hebben
-        # Dit dekt zowel EndpointID als PartyIdentification
+        # Zoek robuust naar alle elementen die een schemeID="9925" hebben
         for elem in root.iter():
             if elem.get('schemeID') == '9925':
                 old_val = elem.text if elem.text else ""
@@ -36,7 +33,6 @@ def convert_xml(xml_content):
                 changed = True
 
         output = io.BytesIO()
-        # Schrijf weg met de XML-declaratie bovenaan
         tree.write(output, encoding='utf-8', xml_declaration=True)
         return output.getvalue(), changed
     except Exception as e:
@@ -46,7 +42,9 @@ def convert_xml(xml_content):
 st.set_page_config(page_title="Peppol Fixer", page_icon="⚙️")
 
 st.title("🇧🇪 Peppol XML Prefix Fixer")
-st.info("Deze tool zet alle `schemeID="9925"` (BTW) om naar `schemeID="0208"` (KBO) en verwijdert 'BE'.")
+
+# CORRECTIE: Gebruik enkele aanhalingstekens om de tekst heen om syntax errors te voorkomen
+st.info('Deze tool zet alle schemeID="9925" (BTW) om naar schemeID="0208" (KBO) en verwijdert BE.')
 
 uploaded_files = st.file_uploader("Upload je XML bestanden", type="xml", accept_multiple_files=True)
 
@@ -57,17 +55,17 @@ if uploaded_files:
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
         for uploaded_file in uploaded_files:
             content = uploaded_file.read()
-            converted_content, status = convert_xml(content)
+            converted_content, result = convert_xml(content)
             
             if converted_content is not None:
                 zip_file.writestr(uploaded_file.name, converted_content)
-                if status is True: # status is 'changed'
+                if result is True: # status is 'changed'
                     st.success(f"✅ Gecorrigeerd: {uploaded_file.name}")
                     success_count += 1
                 else:
                     st.warning(f"⚠️ Geen 9925 gevonden in: {uploaded_file.name}")
             else:
-                st.error(f"❌ Fout in {uploaded_file.name}: {status}")
+                st.error(f"❌ Fout in {uploaded_file.name}: {result}")
 
     if success_count > 0:
         st.divider()
