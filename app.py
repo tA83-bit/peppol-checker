@@ -1,7 +1,7 @@
 import os
 import xml.etree.ElementTree as ET
 
-# De namespaces uit jouw voorbeeldbestand
+# De namespaces specifiek voor jouw UBL Invoice
 namespaces = {
     'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
     'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
@@ -9,43 +9,52 @@ namespaces = {
 }
 
 def fix_be_peppol_id(file_path, output_path):
-    # Registreer namespaces om de 'ns0:' prefix in de output te voorkomen
+    # Registreer namespaces voor een schone output
     ET.register_namespace('', "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2")
     ET.register_namespace('cac', "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2")
     ET.register_namespace('cbc', "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2")
 
-    tree = ET.parse(file_path)
-    root = tree.getroot()
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
 
-    # 1. Pas het EndpointID van de AccountingCustomerParty aan
-    endpoint = root.find('.//cac:AccountingCustomerParty/cbc:EndpointID[@schemeID="9925"]', namespaces)
-    if endpoint is not None:
-        old_val = endpoint.text
-        # Verwijder BE en eventuele punten/spaties
-        new_val = old_val.replace('BE', '').replace('.', '').strip()
-        endpoint.text = new_val
-        endpoint.set('schemeID', '0208')
-        print(f"EndpointID aangepast: {old_val} -> 0208:{new_val}")
+        # Wijziging 1: EndpointID (van 9925 naar 0208)
+        endpoint = root.find('.//cac:AccountingCustomerParty/cbc:EndpointID[@schemeID="9925"]', namespaces)
+        if endpoint is not None:
+            new_val = endpoint.text.replace('BE', '').replace('.', '').strip()
+            endpoint.text = new_val
+            endpoint.set('schemeID', '0208')
 
-    # 2. Pas de PartyIdentification van de AccountingCustomerParty aan
-    party_id = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID[@schemeID="9925"]', namespaces)
-    if party_id is not None:
-        old_val = party_id.text
-        new_val = old_val.replace('BE', '').replace('.', '').strip()
-        party_id.text = new_val
-        party_id.set('schemeID', '0208')
-        print(f"PartyID aangepast: {old_val} -> 0208:{new_val}")
+        # Wijziging 2: PartyIdentification
+        party_id = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID[@schemeID="9925"]', namespaces)
+        if party_id is not None:
+            new_val = party_id.text.replace('BE', '').replace('.', '').strip()
+            party_id.text = new_val
+            party_id.set('schemeID', '0208')
 
-    # Opslaan met behoud van XML declaratie
-    tree.write(output_path, encoding='utf-8', xml_declaration=True)
+        tree.write(output_path, encoding='utf-8', xml_declaration=True)
+        return True
+    except Exception as e:
+        print(f"Fout bij verwerken van {file_path}: {e}")
+        return False
 
-# Uitvoeren voor jouw map
-input_folder = 'jouw_map_met_xmls'
+# --- CONFIGURATIE ---
+# Gebruik '.' voor de huidige map waar het script staat
+input_folder = '.' 
 output_folder = 'gecorrigeerde_xmls'
 
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
+# Lus door de bestanden
+found_files = False
 for filename in os.listdir(input_folder):
     if filename.endswith('.xml'):
-        fix_be_peppol_id(os.path.join(input_folder, filename), os.path.join(output_folder, filename))
+        found_files = True
+        input_path = os.path.join(input_folder, filename)
+        output_path = os.path.join(output_folder, filename)
+        if fix_be_peppol_id(input_path, output_path):
+            print(f"Succes: {filename} omgezet naar schema 0208.")
+
+if not found_files:
+    print(f"Geen XML-bestanden gevonden in map: {os.path.abspath(input_folder)}")
