@@ -21,7 +21,6 @@ def fix_xml_inclusive_0088(xml_text, lookup_data=None):
     if endpoint_match:
         scheme_id = endpoint_match.group(1)
         original_id = endpoint_match.group(2).strip()
-        
         target_vat = None
         
         if scheme_id == "9925":
@@ -32,16 +31,15 @@ def fix_xml_inclusive_0088(xml_text, lookup_data=None):
             log_messages.append(f"🔍 0088 (GLN) gevonden: {original_id}")
             if lookup_data is not None and original_id in lookup_data:
                 target_vat = lookup_data[original_id]
-                log_messages.append(f"✅ BTW-nummer gevonden via lookup: {target_vat}")
+                log_messages.append(f"✅ BTW gevonden via lookup: {target_vat}")
             else:
-                log_messages.append(f"⚠️ GLN {original_id} niet gevonden in de uploadlijst. Kan geen BTW-blok maken.")
+                log_messages.append(f"⚠️ GLN {original_id} niet in lijst. BTW-blok kan niet worden gemaakt.")
 
         if target_vat:
             clean_vat = target_vat.replace('BE', '').replace('.', '').replace(' ', '').strip()
-            # Zorg dat het formaat BE0... is voor het blokje
             formatted_vat = "BE" + clean_vat if not clean_vat.startswith("BE") else clean_vat
             
-            # STAP A: PartyTaxScheme toevoegen/aanpassen
+            # STAP A: PartyTaxScheme toevoegen
             if '<cac:PartyTaxScheme>' not in customer_section:
                 tax_scheme_xml = f'''<cac:PartyTaxScheme>
         <cbc:CompanyID>{formatted_vat}</cbc:CompanyID>
@@ -54,9 +52,9 @@ def fix_xml_inclusive_0088(xml_text, lookup_data=None):
                     xml_text = xml_text.replace(customer_section, new_section)
                     customer_section = new_section
                     changed = True
-                    log_messages.append(f"✨ PartyTaxScheme blok toegevoegd ({formatted_vat})")
+                    log_messages.append(f"✨ PartyTaxScheme toegevoegd: {formatted_vat}")
 
-            # STAP B: Alleen als het 9925 was, vervangen we het naar 0208
+            # STAP B: 9925 naar 0208
             if scheme_id == "9925":
                 old_tag = endpoint_match.group(0)
                 new_tag = old_tag.replace('schemeID="9925"', 'schemeID="0208"').replace(original_id, clean_vat)
@@ -71,24 +69,27 @@ st.set_page_config(page_title="Peppol XML Fixer incl 0088", page_icon="🇧🇪"
 
 st.title("🇧🇪 Peppol XML Fixer incl 0088")
 
-# Zijbalk voor de Lookup Lijst
-st.sidebar.header("Instellingen")
-lookup_file = st.sidebar.file_uploader("Upload GLN-BTW lijst (CSV)", type="csv")
+# Zijbalk voor Lookup Data
+st.sidebar.header("Lookup Instellingen")
+lookup_file = st.sidebar.file_uploader("Upload GLN-BTW lijst (Excel of CSV)", type=["csv", "xlsx"])
 lookup_dict = None
 
 if lookup_file:
     try:
-        df = pd.read_csv(lookup_file, dtype=str)
-        # We verwachten kolommen 'GLN' en 'VAT'
+        if lookup_file.name.endswith('.csv'):
+            df = pd.read_csv(lookup_file, dtype=str)
+        else:
+            df = pd.read_excel(lookup_file, dtype=str)
+        
         if 'GLN' in df.columns and 'VAT' in df.columns:
             lookup_dict = pd.Series(df.VAT.values, index=df.GLN.values).to_dict()
-            st.sidebar.success(f"✅ {len(lookup_dict)} GLN-nummers geladen.")
+            st.sidebar.success(f"✅ {len(lookup_dict)} matches geladen.")
         else:
-            st.sidebar.error("Fout: CSV moet kolommen 'GLN' en 'VAT' hebben.")
+            st.sidebar.error("Kolommen 'GLN' en 'VAT' ontbreken!")
     except Exception as e:
-        st.sidebar.error(f"Fout bij lezen CSV: {e}")
+        st.sidebar.error(f"Fout: {e}")
 
-# Hoofdscherm voor XML's
+# XML Upload
 uploaded_files = st.file_uploader("Upload XML bestanden", type="xml", accept_multiple_files=True)
 
 if uploaded_files:
@@ -98,27 +99,26 @@ if uploaded_files:
     
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for uploaded_file in uploaded_files:
-            content_bytes = uploaded_file.read()
             try:
-                raw_content = content_bytes.decode('utf-8')
-            except:
-                raw_content = content_bytes.decode('latin-1')
-            
-            fixed_content, was_changed, logs = fix_xml_inclusive_0088(raw_content, lookup_dict)
-            
-            zip_file.writestr(uploaded_file.name, fixed_content.encode('utf-8'))
-            if was_changed: success_count += 1
-            all_logs.append({"file": uploaded_file.name, "changed": was_changed, "details": logs})
+                content_bytes = uploaded_file.read()
+                raw_content = content_bytes.decode('utf-8', errors='ignore')
+                
+                fixed_content, was_changed, logs = fix_xml_inclusive_0088(raw_content, lookup_dict)
+                
+                zip_file.writestr(uploaded_file.name, fixed_content.encode('utf-8'))
+                if was_changed: success_count += 1
+                all_logs.append({"file": uploaded_file.name, "changed": was_changed, "details": logs})
+            except Exception as e:
+                all_logs.append({"file": uploaded_file.name, "changed": False, "details": [f"❌ Systeemfout: {e}"]})
 
-    # --- Resultaten ---
+    # Download & Logs
     st.divider()
     if success_count > 0:
         zip_buffer.seek(0)
-        st.download_button("📥 Download Gecorrigeerde XML's (ZIP)", zip_buffer, "peppol_fixed.zip", "application/zip")
+        st.download_button("📥 Download ZIP", zip_buffer, "peppol_fixed.zip", "application/zip")
 
     st.subheader("📋 Verwerkingslogboek")
     for entry in all_logs:
-        icon = "✅" if entry["changed"] else "ℹ️"
-        with st.expander(f"{icon} {entry['file']}"):
+        with st.expander(f"{'✅' if entry['changed'] else 'ℹ️'} {entry['file']}"):
             for d in entry["details"]:
                 st.write(d)
